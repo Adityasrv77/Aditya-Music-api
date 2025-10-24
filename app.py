@@ -12,17 +12,7 @@ CORS(app)
 
 @app.route('/')
 def home():
-    return jsonify({
-        "message": "JioSaavn API is running!",
-        "endpoints": {
-            "search_songs": "/song/?query=SONG_NAME",
-            "get_album": "/album/?query=ALBUM_LINK", 
-            "get_playlist": "/playlist/?query=PLAYLIST_LINK",
-            "get_lyrics": "/lyrics/?query=SONG_LINK_OR_ID",
-            "universal_search": "/result/?query=QUERY_OR_LINK"
-        },
-        "example": "Visit /song/?query=believer to search songs"
-    })
+    return redirect("https://cyberboysumanjay.github.io/JioSaavnAPI/")
 
 
 @app.route('/song/')
@@ -32,12 +22,20 @@ def search():
     query = request.args.get('query')
     lyrics_ = request.args.get('lyrics')
     songdata_ = request.args.get('songdata')
+    page = request.args.get('page', 1, type=int)
+    limit = request.args.get('limit', 20, type=int)
+    fast = request.args.get('fast', 'false')
+    
     if lyrics_ and lyrics_.lower() != 'false':
         lyrics = True
     if songdata_ and songdata_.lower() != 'true':
         songdata = False
+        
     if query:
-        return jsonify(jiosaavn.search_for_song(query, lyrics, songdata))
+        if fast.lower() == 'true':
+            return jsonify(jiosaavn.search_for_song_fast(query, page, limit))
+        else:
+            return jsonify(jiosaavn.search_for_song(query, lyrics, songdata, page, limit))
     else:
         error = {
             "status": False,
@@ -148,7 +146,7 @@ def result():
         lyrics = True
 
     if 'saavn' not in query:
-        return jsonify(jiosaavn.search_for_song(query, lyrics, True))
+        return jsonify(jiosaavn.search_for_song_fast(query, 1, 20))
     try:
         if '/song/' in query:
             print("Song")
@@ -162,7 +160,7 @@ def result():
             songs = jiosaavn.get_album(id, lyrics)
             return jsonify(songs)
 
-        elif '/playlist/' or '/featured/' in query:
+        elif '/playlist/' in query or '/featured/' in query:
             print("Playlist")
             id = jiosaavn.get_playlist_id(query)
             songs = jiosaavn.get_playlist(id, lyrics)
