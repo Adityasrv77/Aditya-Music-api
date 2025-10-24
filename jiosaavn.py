@@ -1,10 +1,11 @@
 import requests
 import endpoints
-import helper
+import helper  # Make sure this line exists
 import json
 from traceback import print_exc
 import re
 from cache import cache_response
+
 
 @cache_response(ttl=600)
 def search_for_song_clean(query, page=1, limit=20, use_scraping=True):
