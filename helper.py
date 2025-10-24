@@ -1,21 +1,32 @@
+import base64
+import jiosaavn
+from pyDes import *
+
 def format_song_clean(data):
     """Transform song data to clean format"""
     try:
         # Get media URL with fallback
         media_url = data.get('media_url')
         if not media_url or 'preview' in media_url:
-            media_url = decrypt_url(data.get('encrypted_media_url', ''))
+            try:
+                media_url = decrypt_url(data.get('encrypted_media_url', ''))
+            except:
+                media_url = None
+        
+        # If still no media URL, try to convert from preview
+        if not media_url:
+            preview_url = data.get('media_preview_url', '')
+            if preview_url:
+                media_url = preview_url.replace("preview", "aac").replace("_96_p.mp4", "_160.mp4")
         
         # Ensure best available quality
-        if data.get('320kbps') != "true" and "_320.mp4" in media_url:
+        if media_url and data.get('320kbps') != "true" and "_320.mp4" in media_url:
             media_url = media_url.replace("_320.mp4", "_160.mp4")
     
-    except Exception:
-        # Fallback to preview URL conversion
-        preview_url = data.get('media_preview_url', '')
-        media_url = preview_url.replace("preview", "aac").replace("_96_p.mp4", "_160.mp4")
+    except Exception as e:
+        print(f"Media URL error: {e}")
+        media_url = data.get('media_preview_url', '').replace("preview", "aac").replace("_96_p.mp4", "_160.mp4")
     
-    # Clean and format all fields
     return {
         "id": data.get('id'),
         "song": format(data.get('song', '')),
@@ -28,7 +39,7 @@ def format_song_clean(data):
         "image": data.get('image', '').replace("150x150", "500x500"),
         "media_url": media_url,
         "perma_url": data.get('perma_url', ''),
-        "copyright": data.get('copyright_text', '').replace("&copy;", "©"),
+        "copyright": format(data.get('copyright_text', '')).replace("&copy;", "©"),
         "lyrics_id": data.get('lyrics_id') if data.get('has_lyrics') == 'true' else None
     }
 
@@ -69,3 +80,36 @@ def safe_int(value, default=0):
         return int(value)
     except:
         return default
+
+def format(string):
+    return string.encode().decode().replace("&quot;", "'").replace("&amp;", "&").replace("&#039;", "'")
+
+def decrypt_url(url):
+    des_cipher = des(b"38346591", ECB, b"\0\0\0\0\0\0\0\0", pad=None, padmode=PAD_PKCS5)
+    enc_url = base64.b64decode(url.strip())
+    dec_url = des_cipher.decrypt(enc_url, padmode=PAD_PKCS5).decode('utf-8')
+    dec_url = dec_url.replace("_96.mp4", "_320.mp4")
+    return dec_url
+
+# Legacy functions for backward compatibility
+def format_song(data, lyrics):
+    clean_data = format_song_clean(data)
+    if lyrics and clean_data.get('lyrics_id'):
+        clean_data['lyrics'] = jiosaavn.get_lyrics(clean_data['lyrics_id'])
+    return clean_data
+
+def format_album(data, lyrics):
+    data['image'] = data['image'].replace("150x150", "500x500")
+    data['name'] = format(data['name'])
+    data['primary_artists'] = format(data['primary_artists'])
+    data['title'] = format(data['title'])
+    for song in data['songs']:
+        song = format_song(song, lyrics)
+    return data
+
+def format_playlist(data, lyrics):
+    data['firstname'] = format(data['firstname'])
+    data['listname'] = format(data['listname'])
+    for song in data['songs']:
+        song = format_song(song, lyrics)
+    return data
