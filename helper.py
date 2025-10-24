@@ -1,14 +1,115 @@
 import base64
-import jiosaavn
-from pyDes import *
 import requests
+from pyDes import *
 from bs4 import BeautifulSoup
 import json
 import re
 
-# ... (keep all your existing helper functions) ...
+def format_song_clean(data):
+    """Transform song data to clean format - UPDATED FOR HYBRID SEARCH"""
+    if not data:
+        return None
+    
+    try:
+        # Handle different data structures from API vs scraping
+        media_url = data.get('media_url') or data.get('media_preview_url', '')
+        
+        # Get media URL with fallback
+        if not media_url or 'preview' in media_url:
+            try:
+                encrypted_url = data.get('encrypted_media_url')
+                if encrypted_url:
+                    media_url = decrypt_url(encrypted_url)
+            except:
+                media_url = data.get('media_preview_url', '').replace("preview", "aac").replace("_96_p.mp4", "_160.mp4")
+        
+        # Ensure best available quality
+        if media_url and data.get('320kbps') != "true" and "_320.mp4" in media_url:
+            media_url = media_url.replace("_320.mp4", "_160.mp4")
+        
+        # Extract artists properly
+        artists = []
+        if 'artists' in data and data['artists']:
+            if isinstance(data['artists'], list):
+                artists = [format(artist) for artist in data['artists'] if artist]
+            else:
+                artists = [format(data['artists'])]
+        elif 'primary_artists' in data and data['primary_artists']:
+            artists = [format(artist.strip()) for artist in data['primary_artists'].split(',') if artist.strip()]
+        elif 'singers' in data and data['singers']:
+            artists = [format(singer.strip()) for singer in data['singers'].split(',') if singer.strip()]
+        
+        # Remove duplicates
+        artists = list(dict.fromkeys(artists))
+        
+        # Get song title
+        song_title = data.get('song') or data.get('title') or ''
+        
+        # Format duration
+        duration_sec = data.get('duration_sec')
+        if not duration_sec:
+            duration_str = data.get('duration', '0')
+            duration_sec = convert_duration(duration_str)
+        
+        return {
+            "id": data.get('id') or data.get('perma_url', '').split('/')[-1] if data.get('perma_url') else str(hash(song_title)),
+            "song": format(song_title),
+            "artists": artists,
+            "album": format(data.get('album', '')),
+            "year": data.get('year', ''),
+            "language": format(data.get('language', '')).title(),
+            "duration_sec": duration_sec,
+            "play_count": safe_int(data.get('play_count', 0)),
+            "image": data.get('image', '').replace("150x150", "500x500"),
+            "media_url": media_url,
+            "perma_url": data.get('perma_url', ''),
+            "copyright": format(data.get('copyright_text', '')).replace("&copy;", "©").replace("&#169;", "©"),
+            "lyrics_id": data.get('lyrics_id') if data.get('has_lyrics') == 'true' else None
+        }
+    
+    except Exception as e:
+        print(f"Error formatting song: {e}")
+        return None
 
-# NEW: Web scraping functions
+def convert_duration(duration_str):
+    """Convert duration string to seconds"""
+    try:
+        if ':' in duration_str:
+            parts = duration_str.split(':')
+            if len(parts) == 2:
+                return int(parts[0]) * 60 + int(parts[1])
+            elif len(parts) == 3:
+                return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+        return int(duration_str)
+    except:
+        return 0
+
+def safe_int(value, default=0):
+    """Safely convert to integer"""
+    try:
+        return int(value)
+    except:
+        return default
+
+def format(string):
+    """Clean and format strings"""
+    if not string:
+        return ""
+    return string.encode().decode('unicode-escape').replace("&quot;", "'").replace("&amp;", "&").replace("&#039;", "'")
+
+def decrypt_url(url):
+    """Decrypt encrypted media URL"""
+    try:
+        des_cipher = des(b"38346591", ECB, b"\0\0\0\0\0\0\0\0", pad=None, padmode=PAD_PKCS5)
+        enc_url = base64.b64decode(url.strip())
+        dec_url = des_cipher.decrypt(enc_url, padmode=PAD_PKCS5).decode('utf-8')
+        dec_url = dec_url.replace("_96.mp4", "_320.mp4")
+        return dec_url
+    except Exception as e:
+        print(f"Decryption error: {e}")
+        return ""
+
+# WEB SCRAPING FUNCTIONS
 def scrape_jiosaavn_search(query):
     """Scrape search results directly from JioSaavn website"""
     url = f"https://www.jiosaavn.com/search/{query}"
@@ -49,17 +150,6 @@ def scrape_jiosaavn_search(query):
                                 return songs
                         except json.JSONDecodeError:
                             continue
-                
-                # Look for song data patterns
-                if 'song' in content and 'duration' in content:
-                    json_match = re.search(r'{\s*"songs":\s*\[.*?\]', content)
-                    if json_match:
-                        try:
-                            data = json.loads(json_match.group(0) + '}')
-                            if 'songs' in data:
-                                return data['songs']
-                        except:
-                            continue
         
         # Method 2: Extract from HTML elements
         songs = extract_songs_from_html(soup)
@@ -96,7 +186,7 @@ def extract_songs_from_initial_data(data):
             results = data['results']
             if isinstance(results, list):
                 for item in results:
-                    if isinstance(item, dict) and 'type' in item and item.get('type') == 'song':
+                    if isinstance(item, dict) and item.get('type') == 'song':
                         song = parse_song_from_search_result(item)
                         if song:
                             songs.append(song)
@@ -118,20 +208,21 @@ def extract_songs_from_html(soup):
     songs = []
     
     try:
-        # Look for song cards
-        song_elements = soup.find_all('div', class_=re.compile(r'song|track|result', re.I))
+        # Look for song cards using various class patterns
+        song_selectors = [
+            '[class*="song"]',
+            '[class*="track"]', 
+            '[class*="result"]',
+            '.song-list',
+            '.track-list'
+        ]
         
-        for element in song_elements:
-            song = parse_song_from_element(element)
-            if song:
-                songs.append(song)
-                
-        # Look for list items
-        list_items = soup.find_all('li', class_=re.compile(r'song|track', re.I))
-        for item in list_items:
-            song = parse_song_from_list_item(item)
-            if song:
-                songs.append(song)
+        for selector in song_selectors:
+            elements = soup.select(selector)
+            for element in elements:
+                song = parse_song_from_element(element)
+                if song:
+                    songs.append(song)
                 
     except Exception as e:
         print(f"Error extracting from HTML: {e}")
@@ -160,14 +251,14 @@ def parse_song_from_search_result(item):
     try:
         return {
             'id': item.get('id', ''),
-            'song': item.get('title', ''),
+            'song': item.get('title', item.get('song', '')),
             'artists': [item.get('primary_artists', '')] if isinstance(item.get('primary_artists'), str) else item.get('artists', []),
             'image': item.get('image', ''),
             'duration': item.get('duration', ''),
             'album': item.get('album', ''),
             'year': item.get('year', ''),
             'language': item.get('language', ''),
-            'perma_url': item.get('perma_url', '')
+            'perma_url': item.get('perma_url', item.get('url', ''))
         }
     except:
         return None
@@ -228,3 +319,46 @@ def remove_duplicate_songs(songs):
             unique_songs.append(song)
     
     return unique_songs
+
+# LEGACY FUNCTIONS FOR BACKWARD COMPATIBILITY
+def format_song(data, lyrics):
+    """Legacy function for backward compatibility"""
+    clean_data = format_song_clean(data)
+    if clean_data and lyrics and clean_data.get('lyrics_id'):
+        # You'll need to import jiosaavn here or handle lyrics differently
+        try:
+            import jiosaavn
+            clean_data['lyrics'] = jiosaavn.get_lyrics(clean_data['lyrics_id'])
+        except:
+            pass
+    return clean_data
+
+def format_album(data, lyrics):
+    """Legacy album formatting"""
+    if not data:
+        return data
+        
+    data['image'] = data.get('image', '').replace("150x150", "500x500")
+    data['name'] = format(data.get('name', ''))
+    data['primary_artists'] = format(data.get('primary_artists', ''))
+    data['title'] = format(data.get('title', ''))
+    
+    if 'songs' in data:
+        for song in data['songs']:
+            song = format_song(song, lyrics)
+    
+    return data
+
+def format_playlist(data, lyrics):
+    """Legacy playlist formatting"""
+    if not data:
+        return data
+        
+    data['firstname'] = format(data.get('firstname', ''))
+    data['listname'] = format(data.get('listname', ''))
+    
+    if 'songs' in data:
+        for song in data['songs']:
+            song = format_song(song, lyrics)
+    
+    return data
