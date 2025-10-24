@@ -4,7 +4,7 @@ from functools import wraps
 # Simple in-memory cache
 cache_store = {}
 
-def cache_response(ttl=300):  # 5 minutes default
+def cache_response(ttl=300):
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -20,3 +20,7 @@ def cache_response(ttl=300):  # 5 minutes default
             return result
         return wrapper
     return decorator
+
+def clear_cache():
+    """Clear all cached data"""
+    cache_store.clear()
